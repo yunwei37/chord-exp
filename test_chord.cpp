@@ -184,6 +184,12 @@ int main() {
     
     // Print the updated network details
     printNetworkDetails(nodes);
+
+    // Print finger tables of all nodes after leaving
+    std::cout << "\n=== Print Finger Tables of All Nodes after leaving ===" << std::endl;
+    for (const auto& node : nodes) {
+        printNodeFingerTable(node);
+    }
     
     // Clean up
     delete n0;
