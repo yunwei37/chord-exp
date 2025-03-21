@@ -20,16 +20,11 @@ void Node::join(Node* node) {
             fingerTable_.set(i, this);  // All fingers point to itself
         }
         predecessor_ = this;  // Set predecessor to itself
-        std::cout << "------------ Node Id:" << (int)id_ << " -------------" << std::endl;
-        std::cout << "Successor: " << (int)getSuccessor()->getId() << "  Predecessor: " << (int)getPredecessor()->getId() << std::endl;
-        fingerTable_.prettyPrint();
     } else {
         // Join the network using node as an entry point
         
         // Initialize finger table
         fingerTable_.set(1, node->findSuccessor(id_ + 1));  // First finger
-        
-        std::cout << "Node " << (int)id_ << " is joining through node " << (int)node->getId() << std::endl;
         
         // Initialize predecessor
         predecessor_ = getSuccessor()->getPredecessor();
@@ -53,11 +48,6 @@ void Node::join(Node* node) {
         
         // Transfer keys that this node is now responsible for
         transferKeys();
-        
-        // Print finger table
-        std::cout << "------------ Node Id:" << (int)id_ << " -------------" << std::endl;
-        std::cout << "Successor: " << (int)getSuccessor()->getId() << "  Predecessor: " << (int)getPredecessor()->getId() << std::endl;
-        fingerTable_.prettyPrint();
     }
 }
 
@@ -144,12 +134,10 @@ void Node::transferKeys() {
     // Check which keys in successor should be moved to this node
     for (const auto& pair : successor->getLocalKeys()) {
         uint8_t key = pair.first;
-        if (inRange(key, predecessor_->getId(), id_)) {
+        if (isResponsibleForKey(key)) {
             keysToTransfer.push_back(key);
             // Insert into this node
             localKeys_[key] = pair.second;
-            std::cout << "Key " << (int)key << " moved from node " << (int)successor->getId() 
-                      << " to node " << (int)id_ << std::endl;
         }
     }
     
@@ -166,15 +154,13 @@ uint8_t Node::find(uint8_t key) {
     
     // If the key is stored locally
     if (localKeys_.find(key) != localKeys_.end()) {
-        // Print the path and return the value
         std::cout << "Look-up result of key " << (int)key << " from node " << (int)id_
-                  << " with path [";
-        for (size_t i = 0; i < path.size(); i++) {
-            std::cout << path[i];
-            if (i < path.size() - 1) std::cout << ",";
+                  << " with path [" << (int)id_ << "] value is ";
+        if (localKeys_[key] == 0) {
+            std::cout << "None" << std::endl;
+        } else {
+            std::cout << (int)localKeys_[key] << std::endl;
         }
-        std::cout << "] value is " << (int)localKeys_[key] << std::endl;
-        
         return localKeys_[key];
     }
     
@@ -185,14 +171,14 @@ uint8_t Node::find(uint8_t key) {
     if (nextNode == this) {
         std::cout << "Look-up result of key " << (int)key << " from node " << (int)id_
                   << " with path [" << (int)id_ << "] key not found" << std::endl;
-        return 0;  // Key not found
+        return 0;
     }
     
-    // Add the next node to the path and continue the lookup
+    // Add the next node to the path
     path.push_back(nextNode->getId());
     
     // Get the value from the next node
-    uint8_t value = nextNode->find(key);
+    uint8_t value = nextNode->localKeys_[key];
     
     // Print the path and result
     std::cout << "Look-up result of key " << (int)key << " from node " << (int)id_
@@ -201,7 +187,12 @@ uint8_t Node::find(uint8_t key) {
         std::cout << path[i];
         if (i < path.size() - 1) std::cout << ",";
     }
-    std::cout << "] value is " << (int)value << std::endl;
+    std::cout << "] value is ";
+    if (value == 0) {
+        std::cout << "None" << std::endl;
+    } else {
+        std::cout << (int)value << std::endl;
+    }
     
     return value;
 }
@@ -212,9 +203,9 @@ void Node::insert(uint8_t key, uint8_t value) {
     Node* responsibleNode = findSuccessor(key);
     
     // Insert the key-value pair into the responsible node
-    responsibleNode->localKeys_[key] = value;
-    std::cout << "Key " << (int)key << " with value " << (int)value 
-              << " inserted at node " << (int)responsibleNode->getId() << std::endl;
+    if (responsibleNode->isResponsibleForKey(key)) {
+        responsibleNode->localKeys_[key] = value;
+    }
 }
 
 // Remove a key from the DHT
@@ -224,7 +215,6 @@ void Node::remove(uint8_t key) {
     if (it != localKeys_.end()) {
         // Remove the key
         localKeys_.erase(it);
-        std::cout << "Key " << (int)key << " removed from node " << (int)id_ << std::endl;
         return;
     }
     
@@ -234,15 +224,12 @@ void Node::remove(uint8_t key) {
     // Remove the key from the responsible node
     if (responsibleNode != this) {
         responsibleNode->remove(key);
-    } else {
-        std::cout << "Key " << (int)key << " not found in the DHT" << std::endl;
     }
 }
 
-// Leave the Chord network (optional)
+// Leave the Chord network
 void Node::leave() {
     if (predecessor_ == this && getSuccessor() == this) {
-        std::cout << "Node " << (int)id_ << " is the only node in the network" << std::endl;
         return;
     }
     
@@ -253,8 +240,6 @@ void Node::leave() {
     // Transfer keys to successor
     for (const auto& pair : localKeys_) {
         getSuccessor()->localKeys_[pair.first] = pair.second;
-        std::cout << "Key " << (int)pair.first << " moved from node " << (int)id_ 
-                  << " to node " << (int)getSuccessor()->getId() << std::endl;
     }
     
     // Update finger tables of other nodes
@@ -268,8 +253,6 @@ void Node::leave() {
             p->fingerTable_.set(i, getSuccessor());
         }
     }
-    
-    std::cout << "Node " << (int)id_ << " has left the network" << std::endl;
     
     // Clear local data
     localKeys_.clear();
