@@ -1,35 +1,21 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -Wextra -g
-
-# Target executable
-TARGET = chord_dht
-
-# Source files
-SRCS = node.cpp test.cpp
-
-# Object files
+CXXFLAGS = -std=c++11 -Wall -Wextra
+SRCS = node.cpp fingertable.cpp test_chord.cpp
 OBJS = $(SRCS:.cpp=.o)
+TARGET = chord_test
 
-# Header files
-HDRS = node.h
+.PHONY: all clean run
 
-# Default target
 all: $(TARGET)
 
-# Link object files to create executable
 $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-# Compile source files to object files
-%.o: %.cpp $(HDRS)
+%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Run the program
 run: $(TARGET)
 	./$(TARGET)
 
-# Clean generated files
 clean:
-	rm -f $(OBJS) $(TARGET)
-
-.PHONY: all run clean 
+	rm -f $(OBJS) $(TARGET) 

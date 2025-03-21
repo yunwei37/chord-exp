@@ -6,7 +6,7 @@
 *.ko
 *.obj
 *.elf
-
+/chord_test
 # Linker output
 *.ilk
 *.map

@@ -1,324 +1,280 @@
 #include "node.h"
 #include <iostream>
+#include <vector>
 #include <algorithm>
-#include <cmath>
-#include <iomanip>
 
-// Helper function to check if key is in the range (start, end]
-bool inRange(uint8_t key, uint8_t start, uint8_t end) {
-    if (start == end) return true;
-    if (start < end) return (key > start && key <= end);
-    return (key > start || key <= end); // Wrapping around the circle
-}
-
-// Helper function to check if key is in the range [start, end)
-bool inRangeInclusive(uint8_t key, uint8_t start, uint8_t end) {
-    if (start == end) return true;
-    if (start < end) return (key >= start && key < end);
-    return (key >= start || key < end); // Wrapping around the circle
-}
-
-// Print the finger table
-void FingerTable::prettyPrint() {
-    std::cout << "FingerTables:" << std::endl;
-    for (size_t k = 1; k <= BITLENGTH; k++) {
-        uint8_t start = (nodeId_ + static_cast<uint8_t>(pow(2, k-1))) % static_cast<uint8_t>(pow(2, BITLENGTH));
-        uint8_t end = (nodeId_ + static_cast<uint8_t>(pow(2, k))) % static_cast<uint8_t>(pow(2, BITLENGTH));
-        std::cout << "| k = " << k << " (" << (int)start << "," << (int)end << ")";
-        std::cout << "\tsucc.: " << (fingerTable_[k] ? (int)fingerTable_[k]->getId() : -1) << " |" << std::endl;
+// Helper function to check if id is in range (start, end) on the Chord ring
+bool inRange(uint8_t id, uint8_t start, uint8_t end) {
+    if (start < end) {
+        return (id > start && id <= end);
+    } else {  // Wrapping around the circle
+        return (id > start || id <= end);
     }
 }
 
-// Add getId method to get node id
-uint8_t Node::getId() const {
-    return id_;
-}
-
-// Get successor node
-Node* Node::getSuccessor() const {
-    return successor_;
-}
-
-// Get predecessor node
-Node* Node::getPredecessor() const {
-    return predecessor_;
-}
-
-// Set successor node
-void Node::setSuccessor(Node* succ) {
-    successor_ = succ;
-}
-
-// Set predecessor node
-void Node::setPredecessor(Node* pred) {
-    predecessor_ = pred;
-}
-
-// Print node information
-void Node::printNodeInfo() const {
-    std::cout << "------------ Node Id:" << (int)id_ << " -------------" << std::endl;
-    std::cout << "Successor: " << (successor_ ? (int)successor_->getId() : -1);
-    std::cout << "  Predecessor: " << (predecessor_ ? (int)predecessor_->getId() : -1) << std::endl;
-    fingerTable_.prettyPrint();
-    std::cout << std::endl;
-}
-
-// Print node keys
-void Node::printKeys() const {
-    std::cout << "------------- Node id:" << (int)id_ << " --------------" << std::endl;
-    std::cout << "{";
-    bool first = true;
-    for (auto const& pair : localKeys_) {
-        if (!first) std::cout << ", ";
-        first = false;
-        std::cout << (int)pair.first << ": " << (pair.second == 0 ? "None" : std::to_string(pair.second));
+// Join node to the Chord network
+void Node::join(Node* node) {
+    if (node == nullptr) {
+        // This is the first node in the network
+        for (int i = 1; i <= BITLENGTH; i++) {
+            fingerTable_.set(i, this);  // All fingers point to itself
+        }
+        predecessor_ = this;  // Set predecessor to itself
+        std::cout << "------------ Node Id:" << (int)id_ << " -------------" << std::endl;
+        std::cout << "Successor: " << (int)getSuccessor()->getId() << "  Predecessor: " << (int)getPredecessor()->getId() << std::endl;
+        fingerTable_.prettyPrint();
+    } else {
+        // Join the network using node as an entry point
+        
+        // Initialize finger table
+        fingerTable_.set(1, node->findSuccessor(id_ + 1));  // First finger
+        
+        std::cout << "Node " << (int)id_ << " is joining through node " << (int)node->getId() << std::endl;
+        
+        // Initialize predecessor
+        predecessor_ = getSuccessor()->getPredecessor();
+        getSuccessor()->setPredecessor(this);
+        
+        // Fill the rest of the finger table
+        for (int i = 1; i < BITLENGTH; i++) {
+            uint8_t next_finger_id = (id_ + (1 << i)) & ((1 << BITLENGTH) - 1);
+            
+            if (inRange(next_finger_id, id_, fingerTable_.get(i)->getId())) {
+                // If next finger id is in the range, reuse the current finger
+                fingerTable_.set(i + 1, fingerTable_.get(i));
+            } else {
+                // Otherwise, find the correct successor
+                fingerTable_.set(i + 1, node->findSuccessor(next_finger_id));
+            }
+        }
+        
+        // Update all nodes whose finger tables should refer to this node
+        updateOthers();
+        
+        // Transfer keys that this node is now responsible for
+        transferKeys();
+        
+        // Print finger table
+        std::cout << "------------ Node Id:" << (int)id_ << " -------------" << std::endl;
+        std::cout << "Successor: " << (int)getSuccessor()->getId() << "  Predecessor: " << (int)getPredecessor()->getId() << std::endl;
+        fingerTable_.prettyPrint();
     }
-    std::cout << "}" << std::endl << std::endl;
 }
 
-// Find the closest predecessor of id
-Node* Node::findClosestPrecedingNode(uint8_t key) {
+// Find the successor node of an identifier
+Node* Node::findSuccessor(uint8_t id) {
+    Node* n = findPredecessor(id);
+    return n->getSuccessor();
+}
+
+// Find the predecessor node of an identifier
+Node* Node::findPredecessor(uint8_t id) {
+    Node* n = this;
+    while (!inRange(id, n->getId(), n->getSuccessor()->getId())) {
+        n = n->closestPrecedingFinger(id);
+    }
+    return n;
+}
+
+// Find the closest finger preceding id
+Node* Node::closestPrecedingFinger(uint8_t id) {
     for (int i = BITLENGTH; i >= 1; i--) {
-        if (fingerTable_.get(i) && inRange(fingerTable_.get(i)->getId(), id_, key)) {
-            return fingerTable_.get(i);
+        Node* finger = fingerTable_.get(i);
+        if (finger != nullptr && inRange(finger->getId(), id_, id)) {
+            return finger;
         }
     }
     return this;
 }
 
-// Find the successor of id
-Node* Node::findSuccessor(uint8_t key) {
-    // If key is in (n, successor], return successor
-    if (inRange(key, id_, successor_->getId())) {
-        return successor_;
-    }
-    // Otherwise, find the closest preceding node and ask it to find successor
-    Node* n0 = findClosestPrecedingNode(key);
-    if (n0 == this) {
-        return successor_;
-    }
-    return n0->findSuccessor(key);
+// Get the successor of the node
+Node* Node::getSuccessor() const {
+    return fingerTable_.get(1);
 }
 
-// Initialize finger table using a node in the network
-void Node::initFingerTable(Node* node) {
-    if (node == nullptr) {
-        // First node in the network
-        successor_ = this;
-        predecessor_ = this;
-        for (int i = 1; i <= BITLENGTH; i++) {
-            fingerTable_.set(i, this);
-        }
-    } else {
-        // Find successor using existing node
-        uint8_t start = (id_ + 1) % 256;
-        successor_ = node->findSuccessor(start);
-        predecessor_ = successor_->getPredecessor();
-        successor_->setPredecessor(this);
-        
-        // Initialize finger table
-        fingerTable_.set(1, successor_);
-        
-        // Fill the rest of the finger table
-        for (int i = 1; i < BITLENGTH; i++) {
-            uint8_t start = (id_ + static_cast<uint8_t>(pow(2, i))) % 256;
-            
-            if (inRange(start, id_, fingerTable_.get(i)->getId())) {
-                fingerTable_.set(i + 1, fingerTable_.get(i));
-            } else {
-                fingerTable_.set(i + 1, node->findSuccessor(start));
-            }
-        }
-    }
+// Get the predecessor of the node
+Node* Node::getPredecessor() const {
+    return predecessor_;
 }
 
-// Update others' finger tables when this node joins
+// Set the predecessor of the node
+void Node::setPredecessor(Node* pred) {
+    predecessor_ = pred;
+}
+
+// Update all nodes whose finger tables should now point to this node
 void Node::updateOthers() {
-    // For each finger i, find the node p whose ith finger might be this node
     for (int i = 1; i <= BITLENGTH; i++) {
-        // Find last node whose ith finger might be this node
-        uint8_t p = (id_ - static_cast<uint8_t>(pow(2, i-1)) + 256) % 256; // +256 to handle underflow
+        // Find the last node p whose i-th finger might be this node
+        uint8_t p_id = (id_ - (1 << (i-1)) + (1 << BITLENGTH)) & ((1 << BITLENGTH) - 1);
+        Node* p = findPredecessor(p_id);
         
-        // Find the predecessor of p
-        Node* pred = findSuccessor(p);
-        if (pred != this) { // Don't update self
-            pred->updateFingerTable(this, i);
-        }
+        // Update p's finger table
+        p->updateFingerTable(this, i);
     }
 }
 
-// Update finger table with new node s at index i
+// Update finger table with node s at index i
 void Node::updateFingerTable(Node* s, int i) {
-    uint8_t start = (id_ + static_cast<uint8_t>(pow(2, i-1))) % 256;
+    uint8_t s_id = s->getId();
+    uint8_t start = (id_ + (1 << (i-1))) & ((1 << BITLENGTH) - 1);
     
-    // If s is in range (n, finger[i]), update finger[i] = s
-    if (inRange(s->getId(), id_, fingerTable_.get(i)->getId())) {
+    // If s is in the range of the i-th finger
+    if (fingerTable_.get(i) == nullptr || 
+        inRange(s_id, start, fingerTable_.get(i)->getId())) {
         fingerTable_.set(i, s);
         
         // Propagate the update
         Node* p = predecessor_;
-        if (p != s) { // Avoid infinite loop
+        if (p != this) {  // Not the only node
             p->updateFingerTable(s, i);
         }
     }
 }
 
-// Node join function
-void Node::join(Node* node) {
-    // Initialize finger table
-    initFingerTable(node);
+// Transfer keys that belong to this node
+void Node::transferKeys() {
+    if (predecessor_ == this) {
+        return;  // No keys to transfer if only one node
+    }
     
-    // Update others' finger tables
-    if (node != nullptr) {
-        updateOthers();
-        
-        // Migrate keys
-        std::vector<uint8_t> keysToMigrate;
-        for (auto const& pair : successor_->getLocalKeys()) {
-            if (inRange(pair.first, predecessor_->getId(), id_)) {
-                keysToMigrate.push_back(pair.first);
-                localKeys_[pair.first] = pair.second;
-            }
-        }
-        
-        // Remove migrated keys from successor
-        for (uint8_t key : keysToMigrate) {
-            successor_->removeLocal(key);
-        }
-        
-        if (!keysToMigrate.empty()) {
-            std::cout << "Keys migrated to node " << (int)id_ << ": ";
-            for (size_t i = 0; i < keysToMigrate.size(); i++) {
-                if (i > 0) std::cout << ", ";
-                std::cout << (int)keysToMigrate[i];
-            }
-            std::cout << std::endl;
+    Node* successor = getSuccessor();
+    std::vector<uint8_t> keysToTransfer;
+    
+    // Check which keys in successor should be moved to this node
+    for (const auto& pair : successor->getLocalKeys()) {
+        uint8_t key = pair.first;
+        if (inRange(key, predecessor_->getId(), id_)) {
+            keysToTransfer.push_back(key);
+            // Insert into this node
+            localKeys_[key] = pair.second;
+            std::cout << "Key " << (int)key << " moved from node " << (int)successor->getId() 
+                      << " to node " << (int)id_ << std::endl;
         }
     }
     
-    // Print finger table
-    printNodeInfo();
+    // Remove transferred keys from successor
+    for (uint8_t key : keysToTransfer) {
+        successor->remove(key);
+    }
 }
 
-// Find key, return its value
+// Lookup a key in the DHT
 uint8_t Node::find(uint8_t key) {
     std::vector<int> path;
-    path.push_back(id_);
+    path.push_back(id_);  // Start with this node
     
-    return findWithPath(key, path);
-}
-
-// Find key with path tracking
-uint8_t Node::findWithPath(uint8_t key, std::vector<int>& path) {
-    // Check if key is in local keys
+    // If the key is stored locally
     if (localKeys_.find(key) != localKeys_.end()) {
-        // Print the path
-        std::cout << "Look-up result of key " << (int)key << " from node " << (int)path[0] 
+        // Print the path and return the value
+        std::cout << "Look-up result of key " << (int)key << " from node " << (int)id_
                   << " with path [";
         for (size_t i = 0; i < path.size(); i++) {
-            if (i > 0) std::cout << ",";
             std::cout << path[i];
+            if (i < path.size() - 1) std::cout << ",";
         }
-        std::cout << "] value is " << (localKeys_[key] == 0 ? "None" : std::to_string(localKeys_[key])) << std::endl;
+        std::cout << "] value is " << (int)localKeys_[key] << std::endl;
         
         return localKeys_[key];
     }
     
-    // Find the node responsible for the key
-    Node* responsibleNode = findSuccessor(key);
+    // Key not stored locally, find the responsible node
+    Node* nextNode = findSuccessor(key);
     
-    // If it's this node, key doesn't exist
-    if (responsibleNode == this) {
-        std::cout << "Look-up result of key " << (int)key << " from node " << (int)path[0] 
-                  << " with path [";
-        for (size_t i = 0; i < path.size(); i++) {
-            if (i > 0) std::cout << ",";
-            std::cout << path[i];
-        }
-        std::cout << "] value is None" << std::endl;
-        return 0;
+    // If the next node is this node, key doesn't exist
+    if (nextNode == this) {
+        std::cout << "Look-up result of key " << (int)key << " from node " << (int)id_
+                  << " with path [" << (int)id_ << "] key not found" << std::endl;
+        return 0;  // Key not found
     }
     
-    // Add node to path and forward the query
-    path.push_back(responsibleNode->getId());
-    return responsibleNode->findWithPath(key, path);
+    // Add the next node to the path and continue the lookup
+    path.push_back(nextNode->getId());
+    
+    // Get the value from the next node
+    uint8_t value = nextNode->find(key);
+    
+    // Print the path and result
+    std::cout << "Look-up result of key " << (int)key << " from node " << (int)id_
+              << " with path [";
+    for (size_t i = 0; i < path.size(); i++) {
+        std::cout << path[i];
+        if (i < path.size() - 1) std::cout << ",";
+    }
+    std::cout << "] value is " << (int)value << std::endl;
+    
+    return value;
 }
 
-// Insert key with optional value
+// Insert a key-value pair into the DHT
 void Node::insert(uint8_t key, uint8_t value) {
     // Find the node responsible for the key
     Node* responsibleNode = findSuccessor(key);
     
-    // Insert the key-value pair
+    // Insert the key-value pair into the responsible node
     responsibleNode->localKeys_[key] = value;
+    std::cout << "Key " << (int)key << " with value " << (int)value 
+              << " inserted at node " << (int)responsibleNode->getId() << std::endl;
 }
 
-// Insert key without value (value = 0)
-void Node::insert(uint8_t key) {
-    insert(key, 0);
-}
-
-// Remove key from local storage
-void Node::removeLocal(uint8_t key) {
-    localKeys_.erase(key);
-}
-
-// Remove key from DHT
+// Remove a key from the DHT
 void Node::remove(uint8_t key) {
-    // Find the node responsible for the key
-    Node* responsibleNode = findSuccessor(key);
-    
-    // Remove the key
-    responsibleNode->removeLocal(key);
-}
-
-// Leave the network
-void Node::leave() {
-    if (successor_ == this) {
-        // Only node in the network
+    // Check if the key is stored locally
+    auto it = localKeys_.find(key);
+    if (it != localKeys_.end()) {
+        // Remove the key
+        localKeys_.erase(it);
+        std::cout << "Key " << (int)key << " removed from node " << (int)id_ << std::endl;
         return;
     }
     
-    // Transfer keys to successor
-    for (auto const& pair : localKeys_) {
-        successor_->localKeys_[pair.first] = pair.second;
+    // If not stored locally, find the responsible node
+    Node* responsibleNode = findSuccessor(key);
+    
+    // Remove the key from the responsible node
+    if (responsibleNode != this) {
+        responsibleNode->remove(key);
+    } else {
+        std::cout << "Key " << (int)key << " not found in the DHT" << std::endl;
+    }
+}
+
+// Leave the Chord network (optional)
+void Node::leave() {
+    if (predecessor_ == this && getSuccessor() == this) {
+        std::cout << "Node " << (int)id_ << " is the only node in the network" << std::endl;
+        return;
     }
     
-    // Update predecessor of successor
-    successor_->setPredecessor(predecessor_);
+    // Notify successor and predecessor
+    getSuccessor()->setPredecessor(predecessor_);
+    predecessor_->fingerTable_.set(1, getSuccessor());
     
-    // Update successor of predecessor
-    predecessor_->setSuccessor(successor_);
+    // Transfer keys to successor
+    for (const auto& pair : localKeys_) {
+        getSuccessor()->localKeys_[pair.first] = pair.second;
+        std::cout << "Key " << (int)pair.first << " moved from node " << (int)id_ 
+                  << " to node " << (int)getSuccessor()->getId() << std::endl;
+    }
     
     // Update finger tables of other nodes
     for (int i = 1; i <= BITLENGTH; i++) {
-        // Find nodes that have this node in their finger table
-        uint8_t p = (id_ - static_cast<uint8_t>(pow(2, i-1)) + 256) % 256;
-        Node* pred = findSuccessor(p);
+        // Find nodes that might have this node in their finger table
+        uint8_t p_id = (id_ - (1 << (i-1)) + (1 << BITLENGTH)) & ((1 << BITLENGTH) - 1);
+        Node* p = findPredecessor(p_id);
         
-        if (pred != this) {
-            pred->fixFingerTableOnLeave(this);
+        // Update the finger table entry if it points to this node
+        if (p->fingerTable_.get(i) == this) {
+            p->fingerTable_.set(i, getSuccessor());
         }
     }
     
-    std::cout << "Node " << (int)id_ << " has left the network." << std::endl;
-}
-
-// Fix finger table when a node leaves
-void Node::fixFingerTableOnLeave(Node* leavingNode) {
+    std::cout << "Node " << (int)id_ << " has left the network" << std::endl;
+    
+    // Clear local data
+    localKeys_.clear();
+    predecessor_ = nullptr;
     for (int i = 1; i <= BITLENGTH; i++) {
-        if (fingerTable_.get(i) == leavingNode) {
-            fingerTable_.set(i, leavingNode->getSuccessor());
-        }
+        fingerTable_.set(i, nullptr);
     }
-}
-
-// Get local keys map
-const std::map<uint8_t, uint8_t>& Node::getLocalKeys() const {
-    return localKeys_;
-}
-
-// Get finger table
-FingerTable& Node::getFingerTable() {
-    return fingerTable_;
 } 
